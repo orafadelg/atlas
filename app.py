@@ -418,7 +418,7 @@ tab_overview, tab_clientes, tab_comp, tab_mercado, tab_ai = st.tabs([
 # VISÃO GERAL
 # -----------------------------------------------------------------------------
 with tab_overview:
-    st.subheader("Resumo Executivo")
+    st.subheader("Resumo Executivo RedBank")
 
     col1, col2, col3, col4 = st.columns(4)
     # KPIs simulados
@@ -430,7 +430,6 @@ with tab_overview:
     cur_cn = float(cur_tri[cur_tri["player"]==BANK]["consideration"].mean())
     cur_pf = float(cur_tri[cur_tri["player"]==BANK]["preference"].mean())
 
-    col1.markdown("### RedBank")
     with col1:
         metric_card("Market Share (mês)", pct(ultimo_ms_rb), delta_ms)
     with col2:
