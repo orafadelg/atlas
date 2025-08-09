@@ -1,27 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Atlas Dashboard – Streamlit Prototype v1 (Okiar)
-------------------------------------------------
-
-Objetivo: protótipo conceitual completo do War Room do Projeto Atlas em Streamlit.
-Este app mostra a visão integrada de Clientes, Concorrência e Mercado com abas:
-- Visão Geral, Clientes, Concorrência, Mercado, AI
-
-Notas:
-- Dados são simulados (mock) e paramétricos para demonstração (redbank, banco fictício)
-- O app foi desenhado para ser auto-contido em um único arquivo.
-- Estilo e componentes focados em clareza executiva
 
 Como rodar:
     streamlit run app.py
-
-Dependências sugeridas:
-    streamlit>=1.33.0
-    pandas>=2.2.0
-    numpy>=1.26.0
-    plotly>=5.22.0
-    python-dateutil
-
 """
 
 import math
@@ -105,9 +87,9 @@ np.random.seed(SEED)
 
 # Players e contexto
 BANK = "RedBank"  # cliente
-PLAYERS_TRAD = ["Bradesco", "Itaú", "Santander", "Banco do Brasil"]
+# Ordem solicitada: RedBank, Itaú, Banco do Brasil, Nubank, Santander e Caixa
+PLAYERS = [BANK, "Itaú", "Banco do Brasil", "Nubank", "Santander", "Caixa"]
 PLAYER_DIGITAL = "Nubank"
-PLAYERS = [BANK] + PLAYERS_TRAD + [PLAYER_DIGITAL]
 
 # Canais e regiões
 CANAIS = ["Agência", "App", "Site", "Correspondente", "Parceiros"]
@@ -122,9 +104,7 @@ CARD_TYPES = ["Classic", "Gold", "Platinum", "Black", "PJ"]
 INV_PRODUCTS = ["CDB", "LCI", "LCA", "Fundos", "Previdência"]
 
 # Segmentos/Personas (simplificado)
-PERSONAS = [
-    "A1", "A2", "B1", "B2", "B3", "C1", "C2", "C3", "D1", "D2"
-]
+PERSONAS = ["A1", "A2", "B1", "B2", "B3", "C1", "C2", "C3", "D1", "D2"]
 
 # Datas (12 meses)
 HOJE = date.today()
@@ -143,18 +123,15 @@ def gen_market_share_series(players: List[str], months: List[date]) -> pd.DataFr
     """Série mensal de market share (estimado) por player."""
     data = []
     base_weights = {p: random.uniform(5, 35) for p in players}
-    # Ajuste para RedBank aparecer competitivo
-    base_weights[BANK] = random.uniform(18, 28)
+    base_weights[BANK] = random.uniform(18, 28)  # leve vantagem ao cliente
 
     for m in months:
-        # oscilações
         noise = {p: np.clip(np.random.normal(0, 1.2), -3, 3) for p in players}
         total = sum(base_weights[p] + noise[p] for p in players)
         for p in players:
             share = (base_weights[p] + noise[p]) / total
             data.append({"mes": m, "player": p, "market_share": max(0.02, share)})
     df = pd.DataFrame(data)
-    # normaliza por mês para somar 1
     df["sum_mes"] = df.groupby("mes")["market_share"].transform("sum")
     df["market_share"] = df["market_share"] / df["sum_mes"]
     df.drop(columns=["sum_mes"], inplace=True)
@@ -162,7 +139,7 @@ def gen_market_share_series(players: List[str], months: List[date]) -> pd.DataFr
 
 
 def gen_brand_funnel(players: List[str], tris: List[Tuple[int, int]]) -> pd.DataFrame:
-    """Funil de marca trimestral: memória (awareness), consideração, preferência."""
+    """Funil de marca trimestral: awareness, consideration, preference."""
     rows = []
     for (y, q) in tris:
         for p in players:
@@ -301,6 +278,12 @@ def gen_inventory_docs() -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 # CRIAÇÃO DOS DATASETS
 # -----------------------------------------------------------------------------
+def ensure_datetime(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Garante que df[col] é datetime64 para uso de .dt"""
+    if col in df.columns and not pd.api.types.is_datetime64_any_dtype(df[col]):
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
 @st.cache_data(show_spinner=False)
 def load_data():
     df_ms = gen_market_share_series(PLAYERS, MESES)
@@ -312,6 +295,10 @@ def load_data():
     df_evt = gen_events_competitive(PLAYERS, MESES)
     df_sov = gen_sov_series(PLAYERS, MESES)
     df_docs = gen_inventory_docs()
+
+    # Normalizações de tipo
+    df_evt = ensure_datetime(df_evt, "data")
+    df_docs = ensure_datetime(df_docs, "data")
     return {
         "market_share": df_ms,
         "funnel": df_funnel,
@@ -396,7 +383,8 @@ def alert_box(titulo: str, texto: str, nivel: str = "normal"):
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.write("## ⚙️ Filtros Globais")
-    players_sel = st.multiselect("Players", PLAYERS, default=[BANK, "Bradesco", "Itaú", PLAYER_DIGITAL])
+    default_players = [BANK, "Itaú", "Banco do Brasil", "Nubank"]
+    players_sel = st.multiselect("Players", PLAYERS, default=default_players)
     tri_sel = st.selectbox("Trimestre", options=[f"{y}-T{q}" for (y, q) in TRIS], index=len(TRIS)-1)
     ano_tri = tuple(map(int, tri_sel.replace("-T", " ").split()))
     mes_sel = st.slider("Janela de meses (histórico)", min_value=3, max_value=12, value=12)
@@ -418,7 +406,6 @@ sov = data["sov"][data["sov"]["player"].isin(players_sel) & data["sov"]["mes"].i
 # -----------------------------------------------------------------------------
 st.title("Atlas – War Room")
 st.caption("Projeto Atlas (Okiar): visão integrada de Clientes, Concorrência e Mercado")
-
 
 # -----------------------------------------------------------------------------
 # ABAS PRINCIPAIS
@@ -477,7 +464,8 @@ with tab_overview:
     st.divider()
 
     st.markdown("<div class='block-title'>Alertas Recentes</div>", unsafe_allow_html=True)
-    evts = data["events"].sort_values("data", ascending=False).head(6)
+    evts = data["events"].copy()
+    evts = ensure_datetime(evts, "data").sort_values("data", ascending=False).head(6)
     for _, r in evts.iterrows():
         nivel = "critico" if r["severidade"]=="Crítico" else ("alto" if r["severidade"]=="Alto" else "normal")
         alert_box(
@@ -487,7 +475,6 @@ with tab_overview:
 
     with st.expander("Inventário de estudos (últimos)"):
         st.dataframe(data["docs"].sort_values("data", ascending=False), use_container_width=True, height=180)
-
 
 # -----------------------------------------------------------------------------
 # CLIENTES
@@ -502,7 +489,7 @@ with tab_clientes:
     with c_b:
         canais_sel = st.multiselect("Canais", CANAIS, default=CANAIS)
     with c_c:
-        uf_sel = st.multiselect("UF", UF, default=["SP", "RJ", "MG", "PR", "RS", "BA", "PE"])  # foco nas maiores
+        uf_sel = st.multiselect("UF", UF, default=["SP", "RJ", "MG", "PR", "RS", "BA", "PE"])
 
     # Habits & attitudes – índices
     hab = data["habits"][data["habits"]["persona"].isin(per_sel)].copy()
@@ -520,8 +507,10 @@ with tab_clientes:
         st.markdown("<div class='block-title'>Evolução dos índices (personas selecionadas)</div>", unsafe_allow_html=True)
         hts = hab[hab["persona"].isin(per_sel)].copy()
         hts["periodo"] = hts.apply(lambda r: f"{int(r['ano'])}-T{int(r['tri'])}", axis=1)
-        fig_hts = px.line(hts.melt(id_vars=["persona", "periodo"], value_vars=["afinidade_digital", "sensibilidade_preco", "aversao_risco", "confianca_banco"], var_name="indice", value_name="valor"),
-                          x="periodo", y="valor", color="indice", line_group="persona", markers=True)
+        fig_hts = px.line(
+            hts.melt(id_vars=["persona", "periodo"], value_vars=["afinidade_digital", "sensibilidade_preco", "aversao_risco", "confianca_banco"], var_name="indice", value_name="valor"),
+            x="periodo", y="valor", color="indice", line_group="persona", markers=True
+        )
         fig_hts.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig_hts, use_container_width=True)
 
@@ -551,7 +540,6 @@ with tab_clientes:
     with st.expander("Tabela detalhada"):
         st.dataframe(ch_ag.sort_values(["canal", "conversoes"], ascending=[True, False]), use_container_width=True, height=240)
 
-
 # -----------------------------------------------------------------------------
 # CONCORRÊNCIA
 # -----------------------------------------------------------------------------
@@ -562,9 +550,14 @@ with tab_comp:
     with comp_a:
         st.markdown("<div class='block-title'>Linha do tempo de movimentos (últimos meses)</div>", unsafe_allow_html=True)
         ev = data["events"][data["events"]["player"].isin([p for p in players_sel if p != BANK])].copy()
-        ev = ev[ev["data"].isin(sorted(ev["data"].unique())[-(mes_sel*2):])]  # janela
+        ev = ensure_datetime(ev, "data")
+        # janela com base em datas mais recentes
+        latest_dates = sorted(ev["data"].dropna().unique())[-(mes_sel*2):]
+        ev = ev[ev["data"].isin(latest_dates)]
         ev["data_str"] = ev["data"].dt.strftime("%d/%m")
-        fig_evt = px.scatter(ev, x="data", y="player", color="severidade", size="score", hover_data=["tipo", "descricao"], color_discrete_map={"Crítico": DANGER, "Alto": WARNING, "Médio": PRIMARY, "Baixo": MUTED})
+        fig_evt = px.scatter(ev, x="data", y="player", color="severidade", size="score",
+                             hover_data=["tipo", "descricao", "data_str"],
+                             color_discrete_map={"Crítico": DANGER, "Alto": WARNING, "Médio": PRIMARY, "Baixo": MUTED})
         fig_evt.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig_evt, use_container_width=True)
 
@@ -628,7 +621,6 @@ with tab_comp:
     with st.expander("Tabela – investimentos (tri)"):
         st.dataframe(inv_tri.sort_values(["player", "produto"]).reset_index(drop=True), use_container_width=True, height=240)
 
-
 # -----------------------------------------------------------------------------
 # MERCADO
 # -----------------------------------------------------------------------------
@@ -673,47 +665,63 @@ with tab_mercado:
     st.markdown("<div class='block-title'>Publicações & dossiês</div>", unsafe_allow_html=True)
     st.dataframe(data["docs"].sort_values("data", ascending=False), use_container_width=True, height=260)
 
-
 # -----------------------------------------------------------------------------
 # AI – Q&A SIMULADO (RAG MOCK)
 # -----------------------------------------------------------------------------
 with tab_ai:
     st.subheader("AI – Pergunte aos dados (simulado)")
-    st.caption("Protótipo conceitual com base em dados deste app.")
+    st.caption("Protótipo conceitual com base nos dados deste app. Use os exemplos abaixo para testar.")
 
-    # Base textual simples (mock): sumariza alguns fatos por tri
+    # Base textual simples (mock): sumariza alguns fatos por tri e mês
     def build_knowledge_base() -> List[Dict[str, str]]:
         kb = []
-        # Fatos simples sobre market share e funil no tri selecionado
+        # Market share (mês mais recente)
         ms_last = ms_hist[ms_hist["mes"]==ms_hist["mes"].max()].groupby("player", as_index=False)["market_share"].mean()
         for _, r in ms_last.iterrows():
             kb.append({
                 "tema": "market_share",
                 "texto": f"No mês mais recente, o market share estimado de {r['player']} foi {r['market_share']:.1%}."
             })
+        # Funil (tri selecionado)
         for _, r in cur_tri.iterrows():
             kb.append({
                 "tema": "funnel",
                 "texto": f"No {int(r['ano'])}-T{int(r['tri'])}, {r['player']} teve awareness {r['awareness']:.0%}, consideração {r['consideration']:.0%} e preferência {r['preference']:.0%}."
             })
-        # Fatos de cartões e investimentos (tri)
-        for _, r in data["card"][ (data["card"]["ano"]==ano_tri[0]) & (data["card"]["tri"]==ano_tri[1]) ].groupby("player").agg({"principalidade":"mean"}).reset_index().iterrows():
+        # Cartões e investimentos (tri)
+        card_tri_kb = data["card"][(data["card"]["ano"]==ano_tri[0]) & (data["card"]["tri"]==ano_tri[1])]
+        for _, r in card_tri_kb.groupby("player").agg({"principalidade":"mean"}).reset_index().iterrows():
             kb.append({"tema":"cartao", "texto": f"Principalidade média de cartões do {r['player']}: {r['principalidade']:.0%}."})
-        for _, r in data["inv"][ (data["inv"]["ano"]==ano_tri[0]) & (data["inv"]["tri"]==ano_tri[1]) ].groupby(["player"]).agg({"captacao_liquida":"sum"}).reset_index().iterrows():
+        inv_tri_kb = data["inv"][(data["inv"]["ano"]==ano_tri[0]) & (data["inv"]["tri"]==ano_tri[1])]
+        for _, r in inv_tri_kb.groupby(["player"]).agg({"captacao_liquida":"sum"}).reset_index().iterrows():
             kb.append({"tema":"investimentos", "texto": f"Captação líquida total em investimentos no tri para {r['player']}: R$ {r['captacao_liquida']:,}."})
-        # Eventos
-        ev_last = data["events"].sort_values("data", ascending=False).head(10)
+        # Eventos recentes
+        ev_last = data["events"].copy()
+        ev_last = ensure_datetime(ev_last, "data").sort_values("data", ascending=False).head(10)
         for _, r in ev_last.iterrows():
             kb.append({"tema":"eventos", "texto": f"{r['data'].strftime('%d/%m')}: {r['tipo']} do {r['player']} (severidade {r['severidade']})."})
         return kb
 
     KB = build_knowledge_base()
 
-    q = st.text_input("Faça uma pergunta (ex.: 'Qual o market share do RedBank?', 'Como está a preferência vs Nubank?')")
-    btn = st.button("Responder")
+    # UI do chatbot/mock
+    ex_cols = st.columns(5)
+    examples = [
+        "Qual o market share do RedBank?",
+        "Como está a preferência vs Nubank?",
+        "Quais eventos recentes de concorrentes?",
+        "Ticket médio e fee por player?",
+        "Como evoluiu o funil neste tri?"
+    ]
+    for i, ex in enumerate(examples):
+        if ex_cols[i].button(ex, use_container_width=True):
+            st.session_state["atlas_q"] = ex
+
+    q = st.text_input("Pergunte ao Atlas", value=st.session_state.get("atlas_q", ""))
+    ask = st.button("Responder", type="primary")
 
     def simple_search(query: str, kb: List[Dict[str, str]], topk: int = 5) -> List[str]:
-        """Busca semântica simples baseada em sobreposição de palavras (mock)."""
+        """Busca simples baseada em sobreposição de palavras (mock)."""
         terms = set([t.lower() for t in query.split()])
         scores = []
         for chunk in kb:
@@ -721,13 +729,16 @@ with tab_ai:
             score = sum(1 for t in terms if t in text)
             scores.append((score, chunk["texto"]))
         scores.sort(key=lambda x: x[0], reverse=True)
-        return [t for _, t in scores[:topk] if _ > 0]
+        return [t for score, t in scores[:topk] if score > 0]
 
-    if btn and q:
+    if not q:
+        st.info("Dica: clique em um exemplo acima ou digite uma pergunta sobre clientes, concorrência ou mercado.")
+    elif ask:
         resps = simple_search(q, KB)
         if not resps:
-            st.info("Não encontrei uma resposta direta. Tente reformular ou consulte as abas acima.")
+            st.warning("Não encontrei uma resposta direta. Tente reformular, ou consulte as abas acima.")
         else:
+            st.success("Respostas encontradas:")
             for r in resps:
                 st.markdown(f"- {r}")
 
